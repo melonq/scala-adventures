@@ -136,7 +136,7 @@ class ErrorExercisesSpec extends Specification {
       }
     }
 
-    "Exercise 10" should {
+    "Exercise 11" should {
       "return a suggestion string " in {
         suggestAProperty2(12, 1) must beRight(s"Hey ${agent1.name} how about selling A great house")
       }
