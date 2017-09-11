@@ -1,6 +1,6 @@
 package com.rea.json
 
-import io.circe._
+import io.circe.{DecodingFailure, _}
 
 
 
@@ -40,7 +40,7 @@ object CirceDecodeExercises {
     *
     */
 
-  def parseToJson(myJsonString: String): Either[ParsingFailure, Json] = ???
+  def parseToJson(myJsonString: String): Either[ParsingFailure, Json] = parser.parse(myJsonString)
 
   /**
     * Thats the first stage of : jsonString --(parse)--> Json --(decode)--> myObject
@@ -60,15 +60,17 @@ object CirceDecodeExercises {
     * Investigate what the method does when the json is not a JString
     */
 
-  def parseToString(myJsonString: String): Option[String] = ???
+  def parseToString(myJsonString: String): Option[String] =
+    parser.parse(myJsonString).map(_.asString).getOrElse(None)
 
   /**
     * Exercise 1.3
-    * If the parsed value is an object, retun the key-value map
+    * If the parsed value is an object, return the key-value map
     * Hint: you will need the Json.asObject method and the JsonObject.toMap.
     */
 
-  def parseToMap(myJsonObject: String) : Option[Map[String, Json]] = ???
+  def parseToMap(myJsonObject: String) : Option[Map[String, Json]] =
+    parser.parse(myJsonObject).map(_.asObject.map(_.toMap)).getOrElse(None)
 
   /** Exercise 1.4
     * Building on the parseToMap method we just wrote,
@@ -85,7 +87,12 @@ object CirceDecodeExercises {
     *
     */
 
-  def parseDescription(propertyJson: String) : Option[String] = ???
+  def parseDescription(propertyJson: String) : Option[String] = for {
+    propertyMap <- parseToMap(propertyJson)
+    descJson <- propertyMap.get("description")
+    desc <- descJson.asString
+  } yield desc
+//    parseToMap(propertyJson).flatMap(_.get("description")).map(_.noSpaces)
 
   /**
     * That's the end of part 1.
@@ -151,7 +158,8 @@ object CirceDecodeExercises {
     * For now return an Option[Json] to handle the case where it doesn't exist.
     */
 
-  def fetchDescription(propertyJson: Json): Option[Json] = ???
+  def fetchDescription(propertyJson: Json): Option[Json] = HCursor.fromJson(propertyJson).downField("description").focus
+
 
 
   /** Exercise 2.2
@@ -159,8 +167,11 @@ object CirceDecodeExercises {
     * But this time we want to be a bit nicer to our consumer, and return a helpful
     * error message in a string if we fail.
     */
-
-  def fetchAgentSurname(propertyJson: Json): Either[String, Json] = ???
+  def fetchAgentSurname(propertyJson: Json): Either[String, Json] =
+    HCursor.fromJson(propertyJson).downField("agent").downField("surname").focus match {
+      case Some(j) => Right(j)
+      case None => Left("cannot found surname")
+    }
 
   /**
     * Look again at exercise 2.2
@@ -208,7 +219,10 @@ object CirceDecodeExercises {
     * Explore the Cursor and DecodingFailure methods to see how to include the history.
     */
 
-    def cursorResult(cursor: ACursor): Decoder.Result[String] = ???
+  def cursorResult(cursor: ACursor): Decoder.Result[String] = cursor.focus match {
+    case Some(r) => Right("Woo hoo")
+    case None => Left(DecodingFailure("oopsie", cursor.history))
+  }
 
 
 
@@ -244,7 +258,9 @@ object CirceDecodeExercises {
     * given type
     */
 
-  def fetchAgentSurname2(propertyJson: Json): Decoder.Result[String] = ???
+  def fetchAgentSurname2(propertyJson: Json): Decoder.Result[String] =
+//    HCursor.fromJson(propertyJson).downField("agent").downField("surname").as[String]
+    HCursor.fromJson(propertyJson).downField("agent").get[String]("surname")
 
 
 
@@ -275,7 +291,11 @@ object CirceDecodeExercises {
   case class Agent(surname: String, firstNames: List[String], principal: Boolean, agentId: Option[String] = None)
 
 
-  def decodeAgent(cursor: ACursor): Decoder.Result[Agent] = ???
+  def decodeAgent(cursor: ACursor): Decoder.Result[Agent] = for {
+    surname <- cursor.get[String]("surname")
+    firstNames <- cursor.get[List[String]]("firstNames")
+    principal <- cursor.get[Boolean]("principal")
+  } yield Agent(surname, firstNames, principal)
 
 
   /**
@@ -301,9 +321,12 @@ object CirceDecodeExercises {
   case class Property(description: String, agent: Agent)
 
 
-  implicit def agentDecoder: Decoder[Agent] = ???
+  def decodeProperty(cursor: HCursor): Decoder.Result[Property] = for {
+    desc <- cursor.get[String]("description")
+    agent <- cursor.get[Agent]("agent")
+  } yield Property(desc, agent)
 
-  def decodeProperty(cursor: HCursor): Decoder.Result[Property] = ???
+  implicit def agentDecoder: Decoder[Agent] = c => decodeAgent(c)
 
   /**
     * Exercise 4.4 - Adapting decoders
@@ -323,8 +346,24 @@ object CirceDecodeExercises {
 
 
   def decodeAgent2(cursor: HCursor): Decoder.Result[Agent2] = {
-    implicit val surnameDecoder: Decoder[Surname] = ???
+//    implicit val surnameDecoder: Decoder[Surname] = c =>
+//      c.get[String]("surname") match {
+//        case Right(s) => Right(Surname(s))
+//        case Left(e) => Left(e)
+//      }
 //    advanced: see if you can rewrite the above using implicitly to find the string decoder for you.
+
+    implicit val surnameDecoder: Decoder[Surname] = c => {
+      val surname: Option[Surname] = for {
+        surnameJson <- c.focus
+        surname <- surnameJson.asString
+      } yield Surname(surname)
+
+      surname match {
+        case None => Left(DecodingFailure("surname decode error", c.history))
+        case Some(s) => Right(s)
+      }
+    }
 
     for {
       surname <- cursor.get[Surname]("surname")
@@ -348,7 +387,15 @@ object CirceDecodeExercises {
     case class PrincipalAgent(surname: String)
 
     def decodePrincipalAgent(agentJson: Json): Decoder.Result[PrincipalAgent] = {
-      val principalsOnlyDecoder: Decoder[PrincipalAgent] = ???
+      val principalsOnlyDecoder: Decoder[PrincipalAgent] = c => {
+        c.get[Boolean]("principal") match {
+          case Right(true) => c.get[String]("surname") match {
+            case Right(surname) => Right(PrincipalAgent(surname))
+            case _ => Left(DecodingFailure("decode surname failed", c.history))
+          }
+          case _ => Left(DecodingFailure("The agent is not principal", c.history))
+        }
+      }
 
       principalsOnlyDecoder.decodeJson(agentJson)
     }
@@ -372,8 +419,10 @@ object CirceDecodeExercises {
 
 
   def decodePropertyWithAgencyJson(propertyJson: Json): Decoder.Result[PropertyWithAgentJson] = {
-    val cursor: HCursor = ???
-    def getAgencyJson(cursor: HCursor): Decoder.Result[String] = ???
+    val cursor: HCursor = HCursor.fromJson(propertyJson)
+    def getAgencyJson(cursor: HCursor): Decoder.Result[String] = {
+      Right(cursor.downField("agent").focus.map(_.noSpaces).getOrElse(""))
+    }
 
     for {
       description <- cursor.get[String]("description")
